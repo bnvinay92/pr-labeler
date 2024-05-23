@@ -1,0 +1,86 @@
+name: Label PRs
+
+on:
+  pull_request:
+    branches:
+      - main
+    types: [opened, synchronize, reopened]
+
+jobs:
+  evaluate:
+    permissions:
+      contents: read
+      pull-requests: write
+    runs-on: ubuntu-latest
+    steps:
+      - name: Update PR Labels
+        uses: actions/github-script@v6
+        with:
+          script: |
+            const prNumber = context.payload.pull_request.number;
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+
+            console.log(`Processing PR #${prNumber} in ${repo} by ${owner}`);
+
+            async function getCurrentLabels() {
+              const response = await github.rest.issues.listLabelsOnIssue({
+                owner,
+                repo,
+                issue_number: prNumber,
+              });
+              const labels = response.data.map(label => label.name);
+              console.log("Current labels:", labels);
+              return labels;
+            }
+
+            async function addLabelIfNeeded(pathPrefixes, label, currentLabels) {
+              const files = await github.rest.pulls.listFiles({
+                owner,
+                repo,
+                pull_number: prNumber
+              });
+              const filePaths = files.data.map(file => file.filename);
+              console.log(`Files changed: ${filePaths.join(', ')}`);
+              const isRelevant = filePaths.some(filePath => pathPrefixes.some(prefix => filePath.startsWith(prefix)));
+              const needsLabel = isRelevant && !currentLabels.includes(label);
+              console.log(`Checking for ${label} label addition, relevant: ${isRelevant}, needed: ${needsLabel}`);
+              if (needsLabel) {
+                await github.rest.issues.addLabels({
+                  owner,
+                  repo,
+                  issue_number: prNumber,
+                  labels: [label]
+                }).catch(error => console.log(`Failed to add label: ${label}`, error));
+              }
+            }
+
+            async function removeLabelIfNotNeeded(pathPrefixes, label, currentLabels) {
+              const files = await github.rest.pulls.listFiles({
+                owner,
+                repo,
+                pull_number: prNumber
+              });
+              const filePaths = files.data.map(file => file.filename);
+              const isRelevant = filePaths.some(filePath => pathPrefixes.some(prefix => filePath.startsWith(prefix)));
+              const needsRemoval = !isRelevant && currentLabels.includes(label);
+              console.log(`Checking for ${label} label removal, relevant: ${isRelevant}, needed: ${needsRemoval}`);
+              if (needsRemoval) {
+                await github.rest.issues.removeLabel({
+                  owner,
+                  repo,
+                  issue_number: prNumber,
+                  name: label
+                }).catch(error => console.log(`Failed to remove label: ${label}`, error));
+              }
+            }
+
+            async function run() {
+              const currentLabels = await getCurrentLabels();
+              await addLabelIfNeeded(['android/', 'kmp/'], 'Android', currentLabels);
+              await addLabelIfNeeded(['ios/', 'kmp/'], 'iOS', currentLabels);
+              await removeLabelIfNotNeeded(['android/', 'kmp/'], 'Android', currentLabels);
+              await removeLabelIfNotNeeded(['ios/', 'kmp/'], 'iOS', currentLabels);
+            }
+
+            run();
